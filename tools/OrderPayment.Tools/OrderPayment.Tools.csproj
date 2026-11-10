@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/OrderPayment.Infrastructure/OrderPayment.Infrastructure.csproj" />
+    <EmbeddedResource Include="Sql/*.sql" />
+  </ItemGroup>
+</Project>
