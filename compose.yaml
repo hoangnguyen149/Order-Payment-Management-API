@@ -1,0 +1,60 @@
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: Y
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Run scripts/init-dev-env.sh first}
+    ports:
+      - "127.0.0.1:1433:1433"
+    volumes:
+      - sql-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_HTTP_PORTS: 8080
+      ConnectionStrings__DefaultConnection: "Server=sqlserver;Database=${SQL_DATABASE:-OrderPayment};User Id=sa;Password=${MSSQL_SA_PASSWORD};Encrypt=True;TrustServerCertificate=True"
+      Jwt__SigningKey: ${JWT_SIGNING_KEY:?Run scripts/init-dev-env.sh first}
+      Auth__AdminPassword: ${ADMIN_PASSWORD:?Run scripts/init-dev-env.sh first}
+      Auth__StaffPassword: ${STAFF_PASSWORD:?Run scripts/init-dev-env.sh first}
+      Payments__WebhookSecret: ${PAYMENT_WEBHOOK_SECRET:?Run scripts/init-dev-env.sh again to add Phase 3 settings}
+      Gateway__BaseUrl: http://fake-external:8080
+      Gateway__SimulationMode: ${GATEWAY_SIMULATION_MODE:-}
+      Marketplace__BaseUrl: http://fake-external:8080
+      Database__MigrateOnStartup: "true"
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      fake-external:
+        condition: service_started
+  fake-external:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fake
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_HTTP_PORTS: 8080
+      Payments__WebhookSecret: ${PAYMENT_WEBHOOK_SECRET:?Run scripts/init-dev-env.sh first}
+      Fake__AdminKey: ${SIMULATOR_ADMIN_KEY:?Run scripts/init-dev-env.sh first}
+      Fake__DatabasePath: /data/fake-external.db
+      Fake__ApiBaseUrl: http://api:8080
+    ports:
+      - "127.0.0.1:8090:8080"
+    volumes:
+      - fake-data:/data
+volumes:
+  sql-data:
+  fake-data:

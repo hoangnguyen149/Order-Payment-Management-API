@@ -1,0 +1,204 @@
+# VS Code REST Client. Set process environment secrets locally before opening the editor.
+# If using Docker's generated .env, read credentials locally and set matching process variables.
+@baseUrl = http://localhost:8080
+@adminPassword = {{$processEnv Auth__AdminPassword}}
+@staffPassword = {{$processEnv Auth__StaffPassword}}
+@mockUrl = http://localhost:8090
+@simulatorKey = {{$processEnv SIMULATOR_ADMIN_KEY}}
+
+### Login Admin
+# @name adminLogin
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "username": "admin",
+  "password": "{{adminPassword}}"
+}
+
+### Login Staff
+# @name staffLogin
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "username": "staff",
+  "password": "{{staffPassword}}"
+}
+
+### Create product (use a fresh SKU if repeating)
+# @name createProduct
+POST {{baseUrl}}/api/products
+Authorization: Bearer {{adminLogin.response.body.$.accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Bàn phím demo",
+  "sku": "KB-DEMO-001",
+  "price": 125000,
+  "stockQuantity": 10
+}
+
+### Create customer (use a fresh email if repeating)
+# @name createCustomer
+POST {{baseUrl}}/api/customers
+Authorization: Bearer {{adminLogin.response.body.$.accessToken}}
+Content-Type: application/json
+
+{
+  "fullName": "Nguyễn Văn An",
+  "email": "an.demo@example.com",
+  "phone": "0901234567"
+}
+
+### List products with pagination
+GET {{baseUrl}}/api/products?page=1&pageSize=20&search=demo&sort=name&descending=false
+Authorization: Bearer {{staffLogin.response.body.$.accessToken}}
+
+### Create order (the server decides unit prices and total)
+# @name createOrder
+POST {{baseUrl}}/api/orders
+Authorization: Bearer {{staffLogin.response.body.$.accessToken}}
+Content-Type: application/json
+
+{
+  "customerId": "{{createCustomer.response.body.$.id}}",
+  "items": [
+    { "productId": "{{createProduct.response.body.$.id}}", "quantity": 2 }
+  ]
+}
+
+### Get order (expected total 250000)
+GET {{baseUrl}}/api/orders/{{createOrder.response.body.$.id}}
+Authorization: Bearer {{staffLogin.response.body.$.accessToken}}
+
+### Replace Pending order; adjust reserved stock
+PUT {{baseUrl}}/api/orders/{{createOrder.response.body.$.id}}
+Authorization: Bearer {{staffLogin.response.body.$.accessToken}}
+Content-Type: application/json
+
+{
+  "customerId": "{{createCustomer.response.body.$.id}}",
+  "items": [
+    { "productId": "{{createProduct.response.body.$.id}}", "quantity": 3 }
+  ]
+}
+
+### List Pending orders for customer
+GET {{baseUrl}}/api/orders?page=1&pageSize=20&customerId={{createCustomer.response.body.$.id}}&status=Pending
+Authorization: Bearer {{staffLogin.response.body.$.accessToken}}
+
+### Cancel order; expected 204; repeating must not restore stock twice
+DELETE {{baseUrl}}/api/orders/{{createOrder.response.body.$.id}}
+Authorization: Bearer {{staffLogin.response.body.$.accessToken}}
+
+### Validation failure: expected 400 ProblemDetails
+POST {{baseUrl}}/api/products
+Authorization: Bearer {{adminLogin.response.body.$.accessToken}}
+Content-Type: application/json
+
+{ "name": "", "sku": "INVALID", "price": -1, "stockQuantity": -1 }
+
+### Role failure: Staff cannot create products, expected 403
+POST {{baseUrl}}/api/products
+Authorization: Bearer {{staffLogin.response.body.$.accessToken}}
+Content-Type: application/json
+
+{ "name": "Denied", "sku": "DENIED", "price": 100, "stockQuantity": 1 }
+
+### Authentication failure: expected 401
+GET {{baseUrl}}/api/orders
+
+### Phase 2: daily revenue (UTC interval, Admin only; requires paid-history seed)
+GET {{baseUrl}}/api/reports/revenue/daily?from=2025-01-01&toExclusive=2025-02-01
+Authorization: Bearer {{adminLogin.response.body.$.accessToken}}
+
+### Phase 2: daily revenue for one customer
+GET {{baseUrl}}/api/reports/revenue/daily?from=2025-01-01&toExclusive=2025-02-01&customerId={{createCustomer.response.body.$.id}}
+Authorization: Bearer {{adminLogin.response.body.$.accessToken}}
+
+### Phase 2: invalid interval, expected 400 ProblemDetails
+GET {{baseUrl}}/api/reports/revenue/daily?from=2025-02-01&toExclusive=2025-01-01
+Authorization: Bearer {{adminLogin.response.body.$.accessToken}}
+
+### Phase 2: Staff cannot read revenue, expected 403
+GET {{baseUrl}}/api/reports/revenue/daily?from=2025-01-01&toExclusive=2025-02-01
+Authorization: Bearer {{staffLogin.response.body.$.accessToken}}
+
+### Phase 3: create a NEW Pending order (earlier demo order was cancelled)
+# @name createPayableOrder
+POST {{baseUrl}}/api/orders
+Authorization: Bearer {{staffLogin.response.body.$.accessToken}}
+Content-Type: application/json
+
+{
+  "customerId": "{{createCustomer.response.body.$.id}}",
+  "items": [{ "productId": "{{createProduct.response.body.$.id}}", "quantity": 1 }]
+}
+
+### Start payment; repeat with the SAME key to reuse this payment
+# @name createPayment
+POST {{baseUrl}}/api/orders/{{createPayableOrder.response.body.$.id}}/payments
+Authorization: Bearer {{staffLogin.response.body.$.accessToken}}
+Idempotency-Key: demo-payment-1
+
+### Settle in mock host; it signs and sends the real callback
+# @name settlePayment
+POST {{mockUrl}}/admin/payments/{{createPayment.response.body.$.paymentReference}}/settle
+X-Simulator-Key: {{simulatorKey}}
+Content-Type: application/json
+
+{ "status": "Succeeded" }
+
+### Replay the SAME callback three times; same EventId
+POST {{mockUrl}}/admin/payments/{{createPayment.response.body.$.paymentReference}}/callback?count=3
+X-Simulator-Key: {{simulatorKey}}
+
+### Payment should now be Succeeded; same payment/reference remains
+GET {{baseUrl}}/api/orders/{{createPayableOrder.response.body.$.id}}/payments
+Authorization: Bearer {{staffLogin.response.body.$.accessToken}}
+
+### Order Paid -> Shipped
+PATCH {{baseUrl}}/api/orders/{{createPayableOrder.response.body.$.id}}/status
+Authorization: Bearer {{staffLogin.response.body.$.accessToken}}
+Content-Type: application/json
+
+{ "status": "Shipped" }
+
+### Shipped -> Completed
+PATCH {{baseUrl}}/api/orders/{{createPayableOrder.response.body.$.id}}/status
+Authorization: Bearer {{staffLogin.response.body.$.accessToken}}
+Content-Type: application/json
+
+{ "status": "Completed" }
+
+### Marketplace input; job imports/upserts this ExternalId on its next poll (default 120 sec)
+POST {{mockUrl}}/admin/marketplace/orders
+X-Simulator-Key: {{simulatorKey}}
+Content-Type: application/json
+
+{
+  "externalId": "demo-marketplace-order-1",
+  "customerEmail": "marketplace@example.test",
+  "customerName": "Marketplace buyer",
+  "items": [{ "sku": "{{createProduct.response.body.$.sku}}", "quantity": 1 }]
+}
+
+### Missing webhook signature must fail 401
+POST {{baseUrl}}/api/webhooks/payment
+Content-Type: application/json
+
+{}
+
+### Gateway simulation: first request 500, repeat exact request gets Pending
+POST {{mockUrl}}/payments
+Content-Type: application/json
+X-Fake-Mode: flaky
+
+{ "paymentReference": "manual-flaky-reference-1", "amount": 125000 }
+
+### Readiness (SQL) versus liveness
+GET {{baseUrl}}/health
+
+### Process liveness
+GET {{baseUrl}}/health/live
