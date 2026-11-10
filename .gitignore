@@ -1,0 +1,13 @@
+**/bin/
+**/obj/
+.vs/
+.idea/
+.env
+.env.*
+!.env.example
+TestResults/
+*.user
+*.suo
+*.log
+artifacts/
+src/OrderPayment.FakeExternalApi/data/
